@@ -563,7 +563,6 @@ export class ItskTreeSelectComponent implements ControlValueAccessor, OnInit {
     }
     if ((this.focused && !event.relatedTarget) || !this._isDescendant(this.elementRef.nativeElement, event.relatedTarget as HTMLElement)) {
       this.focused = false;
-      this.close();
       this.onTouched();
     }
   }

@@ -1,188 +1,155 @@
+import { ConnectedPosition, Overlay, OverlayConfig, OverlayRef } from '@angular/cdk/overlay';
+import { TemplatePortal } from '@angular/cdk/portal';
+import { NgTemplateOutlet } from '@angular/common';
 import {
   ChangeDetectionStrategy,
-  ChangeDetectorRef,
   Component,
   ContentChild,
   ElementRef,
-  EventEmitter,
   HostBinding,
-  Input,
   OnDestroy,
-  OnInit,
-  Output,
+  ViewContainerRef,
+  effect,
+  inject,
+  input,
+  model,
 } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { ItskAlign } from '../../../common/model/itsk-align.enum';
-import { ClickOutsideBase } from '../../../directive/itsk-click-outside/click-outside-base';
-import { findScrollableParentX, findScrollableParentY, findTransformedParent, getRealPosition } from '../../../util/dom-util';
 import { BooleanFunc, BooleanPromiseFunc, boolFuncOrPromiseCallback } from '../../../util/object-util';
 import { ItskDropdownContentDirective } from '../itsk-dropdown-content.directive';
 import { ItskDropdownHeadDirective } from '../itsk-dropdown-head.directive';
-import { NgTemplateOutlet } from '@angular/common';
 
 @Component({
-    selector: 'itsk-dropdown',
-    templateUrl: './itsk-dropdown.component.html',
-    styleUrls: ['./itsk-dropdown.component.scss'],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    imports: [NgTemplateOutlet]
+  selector: 'itsk-dropdown',
+  templateUrl: './itsk-dropdown.component.html',
+  styleUrls: ['./itsk-dropdown.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [NgTemplateOutlet],
 })
-export class ItskDropdownComponent extends ClickOutsideBase implements OnInit, OnDestroy {
+export class ItskDropdownComponent implements OnDestroy {
   @HostBinding('class.dropdown') classDropdown = true;
 
   @ContentChild(ItskDropdownContentDirective, { static: true }) content?: ItskDropdownContentDirective;
   @ContentChild(ItskDropdownHeadDirective, { static: true }) head?: ItskDropdownHeadDirective;
 
-  @Input() align: ItskAlign.Left | ItskAlign.Right = ItskAlign.Left;
-  @Input() fixed = false;
+  private readonly element$ = inject(ElementRef);
+  private readonly overlay = inject(Overlay);
+  private readonly viewContainerRef = inject(ViewContainerRef);
 
-  @Input()
-  set open(val: boolean) {
-    this.setOpen(val);
+  align = input<ItskAlign.Left | ItskAlign.Right>(ItskAlign.Left);
+  fixed = input(false);
+  open = model(false);
+  canOpen = input<boolean | BooleanFunc<void> | BooleanPromiseFunc<void>>(true);
+  canClose = input<boolean | BooleanFunc<void> | BooleanPromiseFunc<void>>(true);
+  autoClose = input(true);
+
+  private overlayRef: OverlayRef | null = null;
+  private detachSub?: Subscription;
+
+  constructor() {
+    effect(() => {
+      if (this.open()) {
+        this.createOverlay();
+      } else {
+        this.destroyOverlay();
+      }
+    });
   }
-
-  @Output() openChange: EventEmitter<boolean> = new EventEmitter<boolean>();
-
-  @Input()
-  canOpen: boolean | BooleanFunc<void> | BooleanPromiseFunc<void> = true;
-
-  @Input()
-  canClose: boolean | BooleanFunc<void> | BooleanPromiseFunc<void> = true;
-
-  @Input()
-  autoClose = true;
-
-  visible: boolean = false;
-  ItskAlign = ItskAlign;
-  top: number | null | undefined;
-  bottom: number | null | undefined;
-  left: number | null | undefined;
-  right: number | null | undefined;
-  minWidth: number | null | undefined;
-
-  private scrollXParentElement$: HTMLElement | null = null;
-  private scrollYParentElement$: HTMLElement | null = null;
-
-  constructor(
-    private element$: ElementRef,
-    private cdr$: ChangeDetectorRef,
-  ) {
-    super(element$.nativeElement);
-  }
-
-  ngOnInit() {}
 
   ngOnDestroy(): void {
-    this.unRegisterOnScrollParent();
-    this.removeListener(false);
+    this.destroyOverlay();
   }
 
-  toggle(visible: boolean) {
+  toggle(visible: boolean): void {
     if (visible) {
-      boolFuncOrPromiseCallback(this.canOpen, () => {
-        this.openChange.emit(visible);
-        this.setOpen(visible);
+      boolFuncOrPromiseCallback(this.canOpen(), () => {
+        this.open.set(true);
       })();
     } else {
-      boolFuncOrPromiseCallback(this.canClose, () => {
-        this.openChange.emit(visible);
-        this.setOpen(visible);
+      boolFuncOrPromiseCallback(this.canClose(), () => {
+        this.open.set(false);
       })();
     }
   }
 
-  private setOpen(visible: boolean) {
-    this.visible = visible;
-    if (visible) {
-      this.addListener(false);
-      this.setPosition();
-      if (this.fixed) {
-        this.registerOnScrollParent();
+  private buildPositions(): ConnectedPosition[] {
+    const isRight = this.align() === ItskAlign.Right;
+    return [
+      {
+        originX: isRight ? 'end' : 'start',
+        originY: 'bottom',
+        overlayX: isRight ? 'end' : 'start',
+        overlayY: 'top',
+      },
+      {
+        originX: isRight ? 'end' : 'start',
+        originY: 'top',
+        overlayX: isRight ? 'end' : 'start',
+        overlayY: 'bottom',
+        panelClass: 'dropdown__content_top',
+      },
+    ];
+  }
+
+  private createOverlay(): void {
+    if (this.overlayRef) {
+      return;
+    }
+
+    const positionStrategy = this.overlay
+      .position()
+      .flexibleConnectedTo(this.element$)
+      .withPositions(this.buildPositions())
+      .withPush(false);
+
+    const scrollStrategy = this.autoClose() ? this.overlay.scrollStrategies.close() : this.overlay.scrollStrategies.reposition();
+
+    const config = new OverlayConfig({
+      positionStrategy,
+      scrollStrategy,
+      hasBackdrop: false,
+      disposeOnNavigation: true,
+      minWidth: this.element$.nativeElement.offsetWidth,
+      panelClass: 'dropdown__content',
+    });
+
+    this.overlayRef = this.overlay.create(config);
+
+    const portal = new TemplatePortal(this.content!.template, this.viewContainerRef);
+    this.overlayRef.attach(portal);
+
+    this.detachSub = this.overlayRef.detachments().subscribe(() => {
+      if (this.open()) {
+        this.destroyOverlay();
       }
-    } else {
-      this.removeListener(false);
-      this.unRegisterOnScrollParent();
-    }
-    this.cdr$.detectChanges();
-  }
+    });
 
-  private onScrollParent = () => {
-    this.unRegisterOnScrollParent();
-    this.openChange.emit(false);
-    this.setOpen(false);
-    this.cdr$.detectChanges();
-  };
-
-  private unRegisterOnScrollParent = () => {
-    if (this.scrollYParentElement$) {
-      this.scrollYParentElement$.removeEventListener('scroll', this.onScrollParent);
-      this.scrollYParentElement$ = null;
-    }
-    if (this.scrollXParentElement$) {
-      this.scrollXParentElement$.removeEventListener('scroll', this.onScrollParent);
-      this.scrollXParentElement$ = null;
-    }
-  };
-
-  private registerOnScrollParent = () => {
-    if (!this.autoClose) {
-      return;
-    }
-    this.unRegisterOnScrollParent();
-    this.scrollYParentElement$ = findScrollableParentY(this.element$.nativeElement);
-    if (this.scrollYParentElement$) {
-      this.scrollYParentElement$.addEventListener('scroll', this.onScrollParent);
-    }
-    this.scrollXParentElement$ = findScrollableParentX(this.element$.nativeElement);
-    if (this.scrollXParentElement$) {
-      this.scrollXParentElement$.addEventListener('scroll', this.onScrollParent);
-    }
-  };
-
-  private setPosition() {
-    if (!this.fixed) {
-      this.top = null;
-      this.left = null;
-      this.bottom = null;
-      this.right = null;
-      this.minWidth = null;
-      return;
-    }
-
-    const rect = getRealPosition(this.element$.nativeElement);
-    const pageWidth = window.innerWidth;
-    const pageHeight = window.innerHeight;
-    this.minWidth = rect.width;
-    let bottom = pageHeight - rect.top;
-    let right = pageWidth - rect.left - rect.width;
-    let top = rect.bottom;
-    let left = rect.left;
-    const transformedParent = findTransformedParent(this.element$.nativeElement);
-    if (transformedParent) {
-      const parentPosition = getRealPosition(transformedParent);
-      left = rect.left - parentPosition.left;
-      top = rect.bottom - parentPosition.top;
-      bottom = parentPosition.bottom - rect.top;
-      right = parentPosition.right - rect.right;
-    }
-    if (rect.top < 0.6 * pageHeight) {
-      this.top = top;
-      this.bottom = null;
-    } else {
-      this.top = null;
-      this.bottom = bottom;
-    }
-    if (rect.left < 0.6 * pageWidth) {
-      this.left = left;
-      this.right = null;
-    } else {
-      this.left = null;
-      this.right = right;
+    if (this.autoClose()) {
+      // overlayRef.backdropClick ложно срабатывает
+      document.addEventListener('click', this.onDocumentClick, true);
     }
   }
 
-  clickedOutside = (click: MouseEvent) => {
-    if (this.autoClose) {
+  private onDocumentClick = (event: MouseEvent) => {
+    const target = event.target as Node;
+    const overlayEl = this.overlayRef?.overlayElement;
+    const hostEl = this.element$.nativeElement;
+
+    if (overlayEl && !overlayEl.contains(target) && !hostEl.contains(target)) {
       this.toggle(false);
     }
   };
+
+  private destroyOverlay(): void {
+    document.removeEventListener('click', this.onDocumentClick, true);
+
+    this.detachSub?.unsubscribe();
+    this.detachSub = undefined;
+
+    if (this.overlayRef) {
+      this.overlayRef.dispose();
+      this.overlayRef = null;
+    }
+  }
 }

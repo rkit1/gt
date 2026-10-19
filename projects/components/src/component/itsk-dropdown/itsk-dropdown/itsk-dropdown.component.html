@@ -1,21 +1,5 @@
 @if (head) {
-  <div class="dropdown__head" (click)="toggle(!visible)">
+  <div class="dropdown__head" (click)="toggle(!this.open())">
     <ng-container *ngTemplateOutlet="head.template"></ng-container>
-  </div>
-}
-@if (visible) {
-  <div
-    class="dropdown__content"
-    [style.top.px]="top"
-    [style.bottom.px]="bottom"
-    [style.left.px]="left"
-    [style.right.px]="right"
-    [style.min-width.px]="minWidth"
-    [class.dropdown__content_top]="bottom"
-    [class.dropdown__content_right]="align === ItskAlign.Right"
-    [class.dropdown__content-fixed]="fixed"
-    [class.dropdown__content-absolute]="!fixed"
-    >
-    <ng-container *ngTemplateOutlet="content.template"></ng-container>
   </div>
 }
